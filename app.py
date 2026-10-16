@@ -49,6 +49,11 @@ def save_robusta_cache(price, source="manual"):
         json.dump(data, f)
     return data
 
+@st.cache_data(ttl=12*60*60, show_spinner=False)
+def get_fetch_time():
+    return datetime.now().strftime("%d. %b %Y. %H:%M")
+
+@st.cache_data(ttl=12*60*60, show_spinner=False)
 def get_usd_eur():
     try:
         r = requests.get("https://api.exchangerate-api.com/v4/latest/USD", timeout=8)
@@ -56,6 +61,7 @@ def get_usd_eur():
     except:
         return 0.892
 
+@st.cache_data(ttl=12*60*60, show_spinner=False)
 def get_arabica():
     try:
         ticker = yf.Ticker("KC=F")
@@ -80,7 +86,7 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-@st.cache_data(ttl=1800, show_spinner=False)
+@st.cache_data(ttl=12*60*60, show_spinner=False)
 def get_robusta_live():
     """ICE London Robusta (USD/t) s investing.com JSON API-ja (instrument 8911)."""
     try:
@@ -97,12 +103,14 @@ def get_robusta_live():
                 month = s[s.index >= s.index[-1] - pd.Timedelta(days=30)]
                 change = (s.iloc[-1] - month.iloc[0]) / month.iloc[0] * 100
                 return {"price": float(s.iloc[-1]), "change_pct": round(float(change), 2),
-                        "history": s.tail(10), "source": "auto"}
+                        "history": s.tail(10), "source": "auto",
+                        "fetched": datetime.now().strftime("%d. %b %Y. %H:%M")}
     except Exception:
         pass
     p = try_fetch_robusta()
     if p:
-        return {"price": p, "change_pct": None, "history": None, "source": "auto (web)"}
+        return {"price": p, "change_pct": None, "history": None, "source": "auto (web)",
+                "fetched": datetime.now().strftime("%d. %b %Y. %H:%M")}
     return None
 
 def try_fetch_robusta():
@@ -150,19 +158,15 @@ arabica = get_arabica()
 cache = load_robusta_cache()
 
 robusta_live = None
-manual_recent = False
-if cache.get("source") == "ručno" and cache.get("updated"):
-    try:
-        last = datetime.strptime(cache["updated"], "%d. %b %Y. %H:%M")
-        manual_recent = datetime.now() - last < timedelta(hours=8)
-    except Exception:
-        pass
+manual_recent = cache.get("source") == "ručno"
 
 if not manual_recent:
     with st.spinner("Ažuriram cijenu Robuste..."):
         robusta_live = get_robusta_live()
     if robusta_live:
-        cache = save_robusta_cache(robusta_live["price"], source=robusta_live["source"])
+        cache = {"price": robusta_live["price"], "updated": robusta_live["fetched"], "source": robusta_live["source"]}
+        if load_robusta_cache().get("price") != robusta_live["price"]:
+            save_robusta_cache(robusta_live["price"], source=robusta_live["source"])
     else:
         st.caption("Automatsko ažuriranje trenutno nije dostupno — koristim zadnju spremljenu cijenu")
 
@@ -180,6 +184,10 @@ with st.expander("Ručna izmjena cijene Robuste (samo ako treba)"):
         cache = save_robusta_cache(manual, source="ručno")
         robusta_price = manual
         st.success("Ručna cijena spremljena")
+    if manual_recent and st.button("Vrati automatsku cijenu"):
+        save_robusta_cache(robusta_price, source="auto")
+        st.cache_data.clear()
+        st.rerun()
         st.rerun()
 
 col1, col2 = st.columns(2)
@@ -234,8 +242,9 @@ if robusta_live and robusta_live.get("history") is not None:
     st.subheader("Robusta – zadnje cijene")
     st.line_chart(pd.DataFrame({"$/t": robusta_live["history"]}), height=220, width="stretch")
 
-st.caption(f"USD/EUR ≈ {usd_eur} · Učitano {datetime.now().strftime('%d. %b %Y. %H:%M')} (Zagreb)")
+st.caption(f"USD/EUR ≈ {usd_eur} · Zadnje ažuriranje cijena: {get_fetch_time()} · automatski svakih 12 h")
 st.caption("Arabica: Yahoo Finance · Robusta: Investing.com (ICE London, automatski; ako ne uspije, koristi zadnju cijenu)")
 
 if st.button("🔄 Osvježi", width="stretch"):
+    st.cache_data.clear()
     st.rerun()
