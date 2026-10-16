@@ -6,6 +6,20 @@ import pandas as pd
 import json
 import os
 import re
+try:
+    from curl_cffi import requests as cffi_requests  # zaobilazi blokadu (TLS otisak preglednika)
+except Exception:
+    cffi_requests = None
+
+def http_get(url, headers=None, timeout=12):
+    if cffi_requests is not None:
+        try:
+            r = cffi_requests.get(url, headers=headers, impersonate="chrome", timeout=timeout)
+            if r.status_code == 200:
+                return r
+        except Exception:
+            pass
+    return requests.get(url, headers=headers, timeout=timeout)
 
 st.set_page_config(
     page_title="Cijene kave",
@@ -60,24 +74,52 @@ def get_arabica():
     except Exception:
         return None
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def get_robusta_live():
+    """ICE London Robusta (USD/t) s investing.com JSON API-ja (instrument 8911)."""
+    try:
+        r = http_get(
+            "https://api.investing.com/api/financialdata/8911/historical/chart/?interval=P1D&pointscount=60",
+            headers={"domain-id": "www", "Accept": "application/json"}, timeout=12)
+        if r.status_code == 200:
+            rows = r.json().get("data") or []
+            s = pd.Series(
+                [float(x[4]) for x in rows],
+                index=pd.to_datetime([x[0] for x in rows], unit="ms").normalize())
+            s = s[~s.index.duplicated(keep="last")]
+            if len(s) and 1000 < s.iloc[-1] < 10000:
+                month = s[s.index >= s.index[-1] - pd.Timedelta(days=30)]
+                change = (s.iloc[-1] - month.iloc[0]) / month.iloc[0] * 100
+                return {"price": float(s.iloc[-1]), "change_pct": round(float(change), 2),
+                        "history": s.tail(10), "source": "auto"}
+    except Exception:
+        pass
+    p = try_fetch_robusta()
+    if p:
+        return {"price": p, "change_pct": None, "history": None, "source": "auto (web)"}
+    return None
+
 def try_fetch_robusta():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
     urls = [
         "https://www.investing.com/commodities/london-coffee",
         "https://hk.investing.com/commodities/london-coffee",
     ]
     for url in urls:
         try:
-            r = requests.get(url, headers=headers, timeout=12)
+            r = http_get(url)
             if r.status_code == 200:
-                match = re.search(r'3,[0-9]{3}\.[0-9]{2}', r.text)
-                if match:
-                    return float(match.group(0).replace(",", ""))
-        except:
+                m = re.search(r'instrument-price-last"[^>]*>([0-9][0-9,]*\.?[0-9]*)<', r.text)
+                if m:
+                    v = float(m.group(1).replace(",", ""))
+                    if 1000 < v < 10000:
+                        return v
+        except Exception:
             continue
     return None
 
@@ -107,23 +149,22 @@ usd_eur = get_usd_eur()
 arabica = get_arabica()
 cache = load_robusta_cache()
 
-should_refresh = True
-if cache.get("updated"):
+robusta_live = None
+manual_recent = False
+if cache.get("source") == "ručno" and cache.get("updated"):
     try:
         last = datetime.strptime(cache["updated"], "%d. %b %Y. %H:%M")
-        if datetime.now() - last < timedelta(hours=8):
-            should_refresh = False
-    except:
+        manual_recent = datetime.now() - last < timedelta(hours=8)
+    except Exception:
         pass
 
-if should_refresh:
+if not manual_recent:
     with st.spinner("Ažuriram cijenu Robuste..."):
-        new_price = try_fetch_robusta()
-        if new_price:
-            cache = save_robusta_cache(new_price, source="auto")
-            st.toast(f"Robusta ažurirana: {new_price:,.0f} $/t")
-        else:
-            st.caption("Automatsko ažuriranje trenutno nije dostupno — koristim zadnju spremljenu cijenu")
+        robusta_live = get_robusta_live()
+    if robusta_live:
+        cache = save_robusta_cache(robusta_live["price"], source=robusta_live["source"])
+    else:
+        st.caption("Automatsko ažuriranje trenutno nije dostupno — koristim zadnju spremljenu cijenu")
 
 robusta_price = float(cache["price"])
 
@@ -169,6 +210,9 @@ with col2:
     eur_t = robusta_price * usd_eur
     eur_kg_r = eur_t / 1000
     st.markdown(f"<p class='big-number'>{robusta_price:,.0f} $/t</p>", unsafe_allow_html=True)
+    if robusta_live and robusta_live.get("change_pct") is not None:
+        rc = robusta_live["change_pct"]
+        st.markdown(f"<p class='{'positive' if rc >= 0 else 'negative'}'>{rc:+.2f}% ovaj mjesec</p>", unsafe_allow_html=True)
     st.markdown(f"<p class='sub-number'>€{eur_kg_r:.2f} / kg</p>", unsafe_allow_html=True)
     st.markdown(f"<p class='sub-number'>€{eur_t:,.0f} / t</p>", unsafe_allow_html=True)
     source = cache.get("source", "")
@@ -182,11 +226,16 @@ st.divider()
 if arabica and "history" in arabica:
     st.subheader("Arabica – zadnje cijene")
     hist = arabica["history"]
-    df = pd.DataFrame({"¢/lb": hist})
-    st.line_chart(df, height=220, use_container_width=True)
+    hist.index = pd.to_datetime(hist.index).tz_localize(None).normalize()
+    df = pd.DataFrame({"¢/lb": hist.astype(float)})
+    st.line_chart(df, height=220, width="stretch")
+
+if robusta_live and robusta_live.get("history") is not None:
+    st.subheader("Robusta – zadnje cijene")
+    st.line_chart(pd.DataFrame({"$/t": robusta_live["history"]}), height=220, width="stretch")
 
 st.caption(f"USD/EUR ≈ {usd_eur} · Učitano {datetime.now().strftime('%d. %b %Y. %H:%M')} (Zagreb)")
-st.caption("Arabica: Yahoo Finance · Robusta: pokušaj automatskog osvježavanja (ako ne uspije, koristi zadnju cijenu)")
+st.caption("Arabica: Yahoo Finance · Robusta: Investing.com (ICE London, automatski; ako ne uspije, koristi zadnju cijenu)")
 
-if st.button("🔄 Osvježi", use_container_width=True):
+if st.button("🔄 Osvježi", width="stretch"):
     st.rerun()
