@@ -134,19 +134,15 @@ def try_fetch_robusta():
 st.markdown("""
 <style>
     .big-number { font-size: 2.4rem; font-weight: 700; margin: 4px 0; }
-    .sub-number { font-size: 1.5rem; color: #1e293b; margin: 2px 0; }
+    .sub-number { font-size: 1.5rem; margin: 2px 0; }
     .positive { color: #16a34a; font-weight: 600; }
     .negative { color: #dc2626; font-weight: 600; }
-    .card {
-        background: #ffffff;
-        border-radius: 16px;
-        padding: 18px 16px;
-        margin-bottom: 14px;
-        border: 1px solid #e2e8f0;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    }
     .header { text-align: center; margin-bottom: 4px; }
     .stButton>button { width: 100%; border-radius: 12px; }
+    header, [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"], [data-testid="stAppDeployButton"], #MainMenu, footer,
+    a[href*="streamlit.io"], div[class*="viewerBadge"], [class*="profileContainer"] { display: none !important; visibility: hidden !important; }
+    .block-container { padding-top: 1.5rem; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -193,41 +189,39 @@ with st.expander("Ručna izmjena cijene Robuste (samo ako treba)"):
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("**Arabica (New York)**")
-    if arabica:
-        cents = arabica["price_cents"]
-        usd_lb = arabica["price_usd"]
-        eur_lb = usd_lb * usd_eur
-        eur_kg = eur_lb * 2.20462
-        eur_tonne = eur_kg * 1000
+    with st.container(border=True):
+        st.markdown("**Arabica (New York)**")
+        if arabica:
+            cents = arabica["price_cents"]
+            usd_lb = arabica["price_usd"]
+            eur_lb = usd_lb * usd_eur
+            eur_kg = eur_lb * 2.20462
+            eur_tonne = eur_kg * 1000
 
-        st.markdown(f"<p class='big-number'>{cents:.2f} ¢/lb</p>", unsafe_allow_html=True)
-        change = arabica["change_pct"]
-        color_class = "positive" if change >= 0 else "negative"
-        st.markdown(f"<p class='{color_class}'>{change:+.2f}% ovaj mjesec</p>", unsafe_allow_html=True)
-        st.markdown(f"<p class='sub-number'>€{eur_kg:.2f} / kg</p>", unsafe_allow_html=True)
-        st.markdown(f"<p class='sub-number'>€{eur_tonne:,.0f} / t</p>", unsafe_allow_html=True)
-    else:
-        st.info("Arabica trenutno nije dostupna")
-    st.markdown("</div>", unsafe_allow_html=True)
+            st.markdown(f"<p class='big-number'>{cents:.2f} ¢/lb</p>", unsafe_allow_html=True)
+            change = arabica["change_pct"]
+            color_class = "positive" if change >= 0 else "negative"
+            st.markdown(f"<p class='{color_class}'>{change:+.2f}% ovaj mjesec</p>", unsafe_allow_html=True)
+            st.markdown(f"<p class='sub-number'>€{eur_kg:.2f} / kg</p>", unsafe_allow_html=True)
+            st.markdown(f"<p class='sub-number'>€{eur_tonne:,.0f} / t</p>", unsafe_allow_html=True)
+        else:
+            st.info("Arabica trenutno nije dostupna")
 
 with col2:
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("**Robusta (London)**")
-    eur_t = robusta_price * usd_eur
-    eur_kg_r = eur_t / 1000
-    st.markdown(f"<p class='big-number'>{robusta_price:,.0f} $/t</p>", unsafe_allow_html=True)
-    if robusta_live and robusta_live.get("change_pct") is not None:
-        rc = robusta_live["change_pct"]
-        st.markdown(f"<p class='{'positive' if rc >= 0 else 'negative'}'>{rc:+.2f}% ovaj mjesec</p>", unsafe_allow_html=True)
-    st.markdown(f"<p class='sub-number'>€{eur_kg_r:.2f} / kg</p>", unsafe_allow_html=True)
-    st.markdown(f"<p class='sub-number'>€{eur_t:,.0f} / t</p>", unsafe_allow_html=True)
-    source = cache.get("source", "")
-    updated = cache.get("updated", "")
-    if updated:
-        st.caption(f"Zadnje ažuriranje: {updated} ({source})")
-    st.markdown("</div>", unsafe_allow_html=True)
+    with st.container(border=True):
+        st.markdown("**Robusta (London)**")
+        eur_t = robusta_price * usd_eur
+        eur_kg_r = eur_t / 1000
+        st.markdown(f"<p class='big-number'>{robusta_price:,.0f} $/t</p>", unsafe_allow_html=True)
+        if robusta_live and robusta_live.get("change_pct") is not None:
+            rc = robusta_live["change_pct"]
+            st.markdown(f"<p class='{'positive' if rc >= 0 else 'negative'}'>{rc:+.2f}% ovaj mjesec</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='sub-number'>€{eur_kg_r:.2f} / kg</p>", unsafe_allow_html=True)
+        st.markdown(f"<p class='sub-number'>€{eur_t:,.0f} / t</p>", unsafe_allow_html=True)
+        source = cache.get("source", "")
+        updated = cache.get("updated", "")
+        if updated:
+            st.caption(f"Zadnje ažuriranje: {updated} ({source})")
 
 st.divider()
 
